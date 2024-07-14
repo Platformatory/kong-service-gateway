@@ -1,0 +1,59 @@
+_format_version: "2.1"
+services:
+  - name: servicegw
+    url: http://httpbin.org/anything
+    routes:
+      - name: servicegw
+        paths:
+          - /kafka-service-gw
+        plugins:
+          - name: basic-auth
+            config:
+              hide_credentials: true
+plugins:
+  - name: kong-service-gateway
+    enabled: true
+    route: servicegw
+    config:
+      entities:
+        kafka_clusters:
+          - name: "cluster1"
+            domain: "example.com"
+            tags: "tag1,tag2"
+            bootstrap_servers: "server1:9092,server2:9092"
+          - name: "cluster2"
+            domain: "example.org"
+            tags: "tag3,tag4"
+            bootstrap_servers: "server3:9092,server4:9092"
+          - name: "cluster3"
+            domain: "example.net"
+            tags: "tag5,tag6"
+            bootstrap_servers: "server5:9092,server6:9092"
+        channels:
+          - name: "channel1"
+            resolve_by: "key_lookup"
+            value: '{"key1": "value1", "key2": "value2"}'
+          - name: "channel2"
+            resolve_by: "regex"
+            value: "^regex_pattern$"
+        configuration_profiles:
+          - name: "profile1"
+            kafka_configurations: '{"config1": "value1", "config2": "value2"}'
+            tags: "tag1,tag2"
+          - name: "profile2"
+            kafka_configurations: '{"config3": "value3", "config4": "value4"}'
+            tags: "tag3,tag4"
+        credentials:
+          - name: "somecred"
+            consumer_match_type: "LITERAL"
+            consumer_match_value: "consumer1"
+            provider: "JSON_MAP"
+            value: '{"foo": "bar"}'
+consumers:
+  - username: consumer1
+    custom_id: consumer1
+basicauth_credentials:
+  - consumer: consumer1
+    username: user1
+    password: password1
+
