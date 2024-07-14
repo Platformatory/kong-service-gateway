@@ -1,18 +1,21 @@
 # Overview
 
-Generic token based authorization
+Configure Kong as a Service Gateway for Kafka metadata discovery
 
 # Features
 
-- Configure the plugin with a secret key
-- Call the protected token issuance endpoint ('/authz') with a trusted client and an authorization predicate (containing "scope", "operator", "value") and an expiry duration (in seconds)
-- Kong uses the generated token to make authorization decisions in-context
+- Kafka Clusters, keyed by domain
+- Client configuration profiles
+- Channel -> Topic routing (with lookups or regexes)
+- Credential mediation- 
 
 # Installation
 
 ```
 luarocks install kong-authz-proxy
 ```
+
+For development, do docker-commpose up -d
 
 # Configuration
 
