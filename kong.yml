@@ -31,8 +31,9 @@ plugins:
                   type: lookup
                   lookup_key_function: "function(uri) return uri.path[1] end"
                   lookup_table:
-                    bar: c0t1
+                    bar: c0t3
                     baz: c0t2
+                    foo: c0t3
 
           - name: kafka_cluster_2
             connection:
@@ -82,10 +83,13 @@ plugins:
             lang: "python"
         - name: highThroughputConsumer
           configs:
-            fetch_min_bytes: 
+            group.id:
+              value: 'youstupidpythongroup'
+              type: "string"
+            fetch.min.bytes: 
               value: "50000"
               type: "number"
-            fetch_max_wait_ms: 
+            fetch.max.wait.ms: 
               value: "100"
               type: "number"
           tags:
