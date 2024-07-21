@@ -23,7 +23,10 @@ services:
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_PLUGINS: basic-auth,kong-service-gateway
       KONG_LOG_LEVEL: 'debug'
-      #KONG_LUA_PACKAGE_PATH: '/usr/local/kong/kong-mocking-advanced;'
+      CC_USER1: 'REDACTED'
+      CC_PW1: 'REDACTED'
+      CC_USER2: 'RDCTD'
+      CC_PW2: 'RDCTD''
     networks:
       - kong-net
     ports:
@@ -34,3 +37,24 @@ services:
     volumes:
       - .:/opt/conf
     command: sh /opt/conf/build.sh
+
+  producer:
+    networks:
+      - kong-net
+    image: python:3.8-slim
+    volumes:
+      - ./producer:/app
+      - ./platformatory_kafka:/app/platformatory_kafka
+    working_dir: /app
+    command: tail -f /dev/null
+
+
+  consumer:
+    image: python:3.8-slim
+    volumes:
+      - ./consumer:/app
+      - ./platformatory_kafka:/app/platformatory_kafka
+    working_dir: /app
+    command: tail -f /dev/null
+    networks:
+      - kong-net
