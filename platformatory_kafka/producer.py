@@ -10,9 +10,13 @@ class Producer:
         self.service_discovery_uri = config.get('service_discovery_uri')
         self.basic_auth = config.get('basic_auth')
         self.client_id = config.get('client_id')
+        self.config_profile = config.get('config_profile')
         self.ttl = config.get('ttl', 300)
         self.cache = {}
         self.cache_time = {}
+
+        if not self.config_profile:
+            raise ValueError("Config profile must be set in the configuration")
 
         self.producer_config = self._get_initial_config()
         self.producer = ConfluentProducer(self.producer_config)
@@ -25,7 +29,7 @@ class Producer:
             try:
                 logging.debug(f"Fetching service config for channel: {channel}")
                 response = requests.get(
-                    f"{self.service_discovery_uri}?config_profile=highThroughputConsumer&channel={channel}",
+                    f"{self.service_discovery_uri}?config_profile={self.config_profile}&channel={channel}",
                     auth=self.basic_auth
                 )
                 response.raise_for_status()

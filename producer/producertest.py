@@ -7,6 +7,7 @@ producer_config = {
     'service_discovery_uri': 'http://kong:8000/servicegw',
     'basic_auth': ('user1', 'password1'),
     'client_id': 'foo',
+    'config_profile': 'durableWrite',  # Config profile from user code
     'ttl': 300  # TTL set to 5 minutes (300 seconds)
 }
 
