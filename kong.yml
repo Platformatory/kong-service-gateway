@@ -5,55 +5,147 @@ services:
     routes:
       - name: servicegw
         paths:
-          - /kafka-service-gw
+          - /servicegw
         plugins:
           - name: basic-auth
             config:
               hide_credentials: true
+
 plugins:
   - name: kong-service-gateway
-    enabled: true
-    route: servicegw
     config:
-      entities:
-        kafka_clusters:
-          - name: "cluster1"
-            domain: "example.com"
-            tags: "tag1,tag2"
-            bootstrap_servers: "server1:9092,server2:9092"
-          - name: "cluster2"
-            domain: "example.org"
-            tags: "tag3,tag4"
-            bootstrap_servers: "server3:9092,server4:9092"
-          - name: "cluster3"
-            domain: "example.net"
-            tags: "tag5,tag6"
-            bootstrap_servers: "server5:9092,server6:9092"
-        channels:
-          - name: "channel1"
-            resolve_by: "key_lookup"
-            value: '{"key1": "value1", "key2": "value2"}'
-          - name: "channel2"
-            resolve_by: "regex"
-            value: "^regex_pattern$"
-        configuration_profiles:
-          - name: "profile1"
-            kafka_configurations: '{"config1": "value1", "config2": "value2"}'
-            tags: "tag1,tag2"
-          - name: "profile2"
-            kafka_configurations: '{"config3": "value3", "config4": "value4"}'
-            tags: "tag3,tag4"
-        credentials:
-          - name: "somecred"
-            consumer_match_type: "LITERAL"
-            consumer_match_value: "consumer1"
-            provider: "JSON_MAP"
-            value: '{"foo": "bar"}'
+      inventory:
+        kafka:
+          - name: kafka_cluster_1
+            connection:
+              bootstrap_servers: "pkc-lzvrd.us-west4.gcp.confluent.cloud:9092"
+            tags:
+              env: prod
+            routing_rules:
+              - predicates:
+                  - part: host
+                    expression: "^example.com$"
+                  - part: path
+                    expression: "^/b"
+                resolve_subject_by:
+                  type: lookup
+                  lookup_key_function: "function(uri) return uri.path[1] end"
+                  lookup_table:
+                    bar: c0t1
+                    baz: c0t2
+
+          - name: kafka_cluster_2
+            connection:
+              bootstrap_servers: "pkc-12576z.us-west2.gcp.confluent.cloud:9092"
+            tags:
+              domain: example.org
+              env: dev
+            routing_rules:
+              - predicates:
+                  - part: host
+                    expression: "^example.org$"
+                  - part: path
+                    expression: "^/t1"
+                resolve_subject_by:
+                  type: transform
+                  transform_function: "function(uri) return 'c1' .. uri.path[1] end"
+              - predicates:
+                  - part: host
+                    expression: "^another.com$"
+                  - part: path
+                    expression: "^/foo"
+                resolve_subject_by:
+                  type: lookup
+                  lookup_key_function: "function(uri) return uri.path[2] end"
+                  lookup_table:
+                    foo: foo_topic
+                    qux: qux_topic
+
+      configuration_profiles:
+        - name: durableWrite
+          configs:
+            acks: 
+              value: "all"
+              type: "string"
+            retries: 
+              value: "3"
+              type: "number"
+            security.protocol: 
+              value: "SASL_SSL"
+              type: "string"
+            security.mechanism: 
+              value: "PLAIN"
+              type: "string"
+          tags:
+            priority: "high"
+            type: "producer"
+            lang: "python"
+        - name: highThroughputConsumer
+          configs:
+            fetch_min_bytes: 
+              value: "50000"
+              type: "number"
+            fetch_max_wait_ms: 
+              value: "100"
+              type: "number"
+          tags:
+            priority: "medium"
+            type: "consumer"
+        - name: fastRead
+          configs:
+            acks: 
+              value: "1"
+              type: "string"
+            retries: 
+              value: "5"
+              type: "number"
+            fetch.min.bytes: 
+              value: "1024"
+              type: "number"
+          tags:
+            priority: "high"
+            type: "consumer"
+        - name: safeWrite
+          configs:
+            acks: 
+              value: "all"
+              type: "string"
+            retries: 
+              value: "10"
+              type: "number"
+            security.protocol: 
+              value: "SSL"
+              type: "string"
+          tags:
+            priority: "critical"
+            type: "producer"
+            lang: "python"
+
+      credentials:
+        - consumer: consumer1
+          name: somecred
+          value:
+            security.protocol: "SASL_SSL"
+            sasl.mechanisms: "PLAIN"
+            sasl.username: "{vault://env/cc-user1}"
+            sasl.password: "{vault://env/cc-pw1}"
+        - consumer: consumer2
+          name: somenewcred
+          value:
+            security.protocol: "SASL_SSL"
+            sasl.mechanisms: "PLAIN"
+            sasl.username: "{vault://env/cc-user2}"
+            sasl.password: "{vault://env/cc-pw2}"
+
 consumers:
   - username: consumer1
     custom_id: consumer1
+  - username: consumer2
+    custom_id: consumer2
 basicauth_credentials:
   - consumer: consumer1
     username: user1
     password: password1
-
+  - consumer: consumer2
+    username: user2
+    password: password2

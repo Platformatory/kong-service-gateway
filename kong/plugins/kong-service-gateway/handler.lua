@@ -85,7 +85,7 @@ end
 local function find_configuration_profile(profiles, profile_name)
   for _, profile in ipairs(profiles) do
     if profile.name == profile_name then
-      return profile.kafka_configurations
+      return profile.configs
     end
   end
   return nil, "Configuration profile not found"
@@ -94,15 +94,25 @@ end
 local function find_credential(credentials, consumer_name)
   for _, cred in ipairs(credentials) do
     if cred.consumer == consumer_name then
-      if cred.provider == "literal" then
-        return cred.value
-      elseif cred.provider == "env" then
-        local transformed_value = {}
-        for k, v in pairs(cred.value) do
-          transformed_value[k] = os.getenv(v)
+      local transformed_value = {}
+      for k, v in pairs(cred.value) do
+        if v:match("^awssm://") then
+          -- Placeholder for AWS Secrets Manager integration
+          transformed_value[k] = "AWS Secrets Manager value" -- Replace with actual implementation
+        elseif v:match("^akv://") then
+          -- Placeholder for Azure Key Vault integration
+          transformed_value[k] = "Azure Key Vault value" -- Replace with actual implementation
+        elseif v:match("^gcsm://") then
+          -- Placeholder for Google Cloud Secrets Manager integration
+          transformed_value[k] = "Google Cloud Secrets Manager value" -- Replace with actual implementation
+        elseif v:match("^hcv://") then
+          -- Placeholder for HashiCorp Vault integration
+          transformed_value[k] = "HashiCorp Vault value" -- Replace with actual implementation
+        else
+          transformed_value[k] = v
         end
-        return transformed_value
       end
+      return transformed_value
     end
   end
   return nil, "Credential not found"
@@ -113,6 +123,55 @@ local function merge_tables(t1, t2)
     t1[k] = v
   end
   return t1
+end
+
+local function cast_config_values(configs)
+  local casted_configs = {}
+  for k, v in pairs(configs) do
+    if v.type == "number" then
+      casted_configs[k] = tonumber(v.value)
+    elseif v.type == "boolean" then
+      casted_configs[k] = v.value == "true"
+    else
+      casted_configs[k] = v.value
+    end
+  end
+  return casted_configs
+end
+
+local function process_channel(config, uri, config_profile, consumer)
+  for _, kafka_cluster in ipairs(config.inventory.kafka) do
+    local rule, channel_mapping, err = find_routing_rule(kafka_cluster.routing_rules, uri)
+    if rule then
+      local configuration_profile, err = find_configuration_profile(config.configuration_profiles, config_profile)
+      if not configuration_profile then
+        kong.log.err("Configuration profile not found: ", err)
+        return nil, "Configuration profile not found: " .. err
+      end
+
+      local consumer_name = consumer.username or consumer.custom_id
+      local credential, err = find_credential(config.credentials, consumer_name)
+      if not credential then
+        kong.log.err("Credential not found: ", err)
+        return nil, "Credential not found: " .. err
+      end
+
+      local casted_configs = cast_config_values(configuration_profile)
+
+      local response = {
+        connection = kafka_cluster.connection,
+        channel_mapping = { [uri.path[1]] = channel_mapping },
+        configuration = casted_configs,
+        credentials = credential,
+      }
+      kong.log.inspect(response)
+      return response, nil
+    else
+      kong.log.debug("No matching routing rule found for cluster: ", kafka_cluster.name, " with host: ", uri.host)
+    end
+  end
+
+  return nil, "No matching routing rule found"
 end
 
 local KongServiceGateway = {}
@@ -133,55 +192,93 @@ function KongServiceGateway:access(config)
   local query_params = kong.request.get_query()
   kong.log.inspect(query_params)
   local config_profile = query_params["config_profile"]
-  local channel_url = query_params["channel"]
+  local channels = query_params["channel"] or query_params["channel[]"]
 
-  if not config_profile or not channel_url then
+  if not config_profile or not channels then
     kong.log.err("config_profile or channel query parameters are missing")
     return kong.response.exit(400, { message = "config_profile and channel query parameters are required" })
   end
 
-  local uri, err = parse_channel_url(channel_url)
-  if not uri then
-    kong.log.err("Invalid channel URL: ", err)
-    return kong.response.exit(400, { message = err })
+  if type(channels) == "string" then
+    channels = { channels }
   end
 
-  kong.log.inspect(uri)
+  if #channels == 1 then
+    local uri, err = parse_channel_url(channels[1])
+    if not uri then
+      kong.log.err("Invalid channel URL: ", err)
+      return kong.response.exit(400, { message = err })
+    end
 
-  -- Iterate over each Kafka cluster
-  for _, kafka_cluster in ipairs(config.inventory.kafka) do
-    -- Check routing rules for this Kafka cluster
-    local rule, channel_mapping, err = find_routing_rule(kafka_cluster.routing_rules, uri)
-    if rule then
-      -- We have a match, find the configuration profile
-      local configuration_profile, err = find_configuration_profile(config.configuration_profiles, config_profile)
-      if not configuration_profile then
-        kong.log.err("Configuration profile not found: ", err)
-        return kong.response.exit(404, { message = err })
-      end
-
-      -- Process the credentials
-      local consumer_name = consumer.username or consumer.custom_id
-      local credential, err = find_credential(config.credentials, consumer_name)
-      if not credential then
-        kong.log.err("Credential not found: ", err)
-        return kong.response.exit(404, { message = err })
-      end
-
-      -- Merge configuration profile and credentials
-      local merged_configuration = merge_tables(configuration_profile, credential)
-
-      -- Prepare the response
-      local response = merge_tables(kafka_cluster.connection, { channel_mapping = channel_mapping, configuration = merged_configuration })
+    local response, err = process_channel(config, uri, config_profile, consumer)
+    if response then
       kong.log.inspect(response)
       return kong.response.exit(200, response)
     else
-      kong.log.debug("No matching routing rule found for cluster: ", kafka_cluster.name, " with host: ", uri.host)
+      kong.log.err("Error processing channel: ", err)
+      return kong.response.exit(404, { message = err })
     end
-  end
+  else
+    local scheme, host
+    for _, channel_url in ipairs(channels) do
+      local uri, err = parse_channel_url(channel_url)
+      if not uri then
+        kong.log.err("Invalid channel URL: ", err)
+        return kong.response.exit(400, { message = err })
+      end
 
-  kong.log.err("No matching routing rule found")
-  return kong.response.exit(404, { message = "No matching routing rule found" })
+      if not scheme then
+        scheme = uri.scheme
+        host = uri.host
+      else
+        if scheme ~= uri.scheme or host ~= uri.host then
+          return kong.response.exit(400, { message = "All channels must have the same scheme and host" })
+        end
+      end
+    end
+
+    local results = {}
+    local cache = {}
+
+    for _, channel_url in ipairs(channels) do
+      if cache[channel_url] then
+        results[channel_url] = cache[channel_url]
+      else
+        local uri, err = parse_channel_url(channel_url)
+        if not uri then
+          kong.log.err("Invalid channel URL: ", err)
+          return kong.response.exit(400, { message = err })
+        end
+
+        kong.log.inspect(uri)
+
+        local response, err = process_channel(config, uri, config_profile, consumer)
+        if response then
+          cache[channel_url] = response
+          results[channel_url] = response
+        else
+          kong.log.err("Error processing channel: ", err)
+          return kong.response.exit(404, { message = err })
+        end
+      end
+    end
+
+    local final_response = {
+      connection = results[channels[1]].connection,
+      channel_mapping = {},
+      configuration = results[channels[1]].configuration,
+      credentials = results[channels[1]].credentials,
+    }
+
+    for channel_url, data in pairs(results) do
+      for path, mapping in pairs(data.channel_mapping) do
+        final_response.channel_mapping[path] = mapping
+      end
+    end
+
+    kong.log.inspect(final_response)
+    return kong.response.exit(200, final_response)
+  end
 end
 
 return KongServiceGateway
