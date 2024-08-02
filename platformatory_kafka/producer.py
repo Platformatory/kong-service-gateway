@@ -55,7 +55,8 @@ class Producer:
                     auth=self.basic_auth
                 )
                 response.raise_for_status()
-                self.cache[channel] = response.json()
+                new_config = response.json()
+                self.cache[channel] = new_config
                 self.cache_time[channel] = time.time()
                 logging.debug(f"Fetched config: {self.cache[channel]}")
             except requests.exceptions.RequestException as e:
@@ -66,18 +67,17 @@ class Producer:
             logging.debug(f"Using cached config for channel: {channel}. Time left for cache refresh: {time_left:.2f} seconds")
         return self.cache[channel]
 
+    def _merge_config(self, config):
+        merged_config = {}
+        merged_config.update(config['connection'])
+        merged_config.update(config['credentials'])
+        merged_config.update(config['configuration'])
+        merged_config['client.id'] = self.client_id
+        return merged_config
+
     def _get_initial_config(self, channel):
         config = self._fetch_service_config(channel)
-        initial_config = {
-            'bootstrap.servers': config['connection']['bootstrap_servers'],
-            'sasl.username': config['credentials']['sasl.username'],
-            'sasl.mechanisms': config['credentials']['sasl.mechanisms'],
-            'sasl.password': config['credentials']['sasl.password'],
-            'security.protocol': config['credentials']['security.protocol'],
-            'client.id': self.client_id,
-            'retries': config['configuration']['retries'],
-            'acks': config['configuration']['acks'],
-        }
+        initial_config = self._merge_config(config)
         return initial_config
 
     def produce(self, channel, value, key=None, partition=None, on_delivery=None, *args, **kwargs):

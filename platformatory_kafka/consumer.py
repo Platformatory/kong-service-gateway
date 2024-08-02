@@ -41,49 +41,51 @@ class Consumer:
 
     def _fetch_service_config(self, channels):
         channels_key = ','.join(channels)
-        if not self._is_cache_valid(channels_key):
-            try:
-                logging.debug(f"Fetching service config for channels: {channels}")
-                query_params = {
-                    'config_profile': self.config_profile,
-                }
-                if len(channels) > 1:
-                    for i, channel in enumerate(channels):
-                        query_params[f'channel[{i}]'] = channel
-                else:
-                    query_params['channel'] = channels[0]
+        try:
+            logging.debug(f"Fetching service config for channels: {channels}")
+            query_params = {
+                'config_profile': self.config_profile,
+            }
+            if len(channels) > 1:
+                for i, channel in enumerate(channels):
+                    query_params[f'channel[{i}]'] = channel
+            else:
+                query_params['channel'] = channels[0]
 
-                # Encode additional parameters
-                encoded_params = self._encode_nested_params(self.additional_params)
-                query_params.update(encoded_params)
-                query_string = urlencode(query_params, quote_via=quote_plus)
-                response = requests.get(
-                    f"{self.service_gateway_uri}?{query_string}",
-                    auth=self.basic_auth
-                )
-                response.raise_for_status()
-                self.cache[channels_key] = response.json()
+            # Encode additional parameters
+            encoded_params = self._encode_nested_params(self.additional_params)
+            query_params.update(encoded_params)
+            query_string = urlencode(query_params, quote_via=quote_plus)
+            response = requests.get(
+                f"{self.service_gateway_uri}?{query_string}",
+                auth=self.basic_auth
+            )
+            response.raise_for_status()
+            new_config = response.json()
+            if not self._is_cache_valid(channels_key) or new_config != self.cache.get(channels_key):
+                self.cache[channels_key] = new_config
                 self.cache_time[channels_key] = time.time()
-                logging.debug(f"Fetched config: {self.cache[channels_key]}")
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Failed to fetch service config for channels {channels}: {e}")
-                raise
-        else:
-            time_left = self.ttl - (time.time() - self.cache_time[channels_key])
-            logging.debug(f"Using cached config for channels: {channels}. Time left for cache refresh: {time_left:.2f} seconds")
-        return self.cache[channels_key]
+                logging.debug(f"Fetched new config: {self.cache[channels_key]}")
+                return True, new_config
+            else:
+                time_left = self.ttl - (time.time() - self.cache_time[channels_key])
+                logging.debug(f"Using cached config for channels: {channels}. Time left for cache refresh: {time_left:.2f} seconds")
+                return False, self.cache[channels_key]
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to fetch service config for channels {channels}: {e}")
+            raise
+
+    def _merge_config(self, config):
+        merged_config = {}
+        merged_config.update(config['connection'])
+        merged_config.update(config['credentials'])
+        merged_config.update(config['configuration'])
+        merged_config['client.id'] = self.client_id
+        return merged_config
 
     def _get_initial_config(self, channels):
-        config = self._fetch_service_config(channels)
-        initial_config = {
-            'bootstrap.servers': config['connection']['bootstrap_servers'],
-            'sasl.username': config['credentials']['sasl.username'],
-            'sasl.mechanisms': config['credentials']['sasl.mechanisms'],
-            'sasl.password': config['credentials']['sasl.password'],
-            'security.protocol': config['credentials']['security.protocol'],
-            'client.id': self.client_id,
-            'group.id': config['configuration']['group.id'],  # Include group.id from the fetched configuration
-        }
+        is_new_config, config = self._fetch_service_config(channels)
+        initial_config = self._merge_config(config)
         return initial_config
 
     def subscribe(self, channels, **kwargs):
@@ -94,15 +96,13 @@ class Consumer:
         self.consumer_config = self._get_initial_config(channels)
         self.consumer = ConfluentConsumer(self.consumer_config)
 
-        topic_mappings = self._get_topic_mappings(channels)
-        topics = list(topic_mappings.values())
-        
+        topics = self._get_topics(channels)
         logging.debug(f"Subscribing to topics: {topics}")
         self.consumer.subscribe(topics, **kwargs)
 
-    def _get_topic_mappings(self, channels):
-        config = self._fetch_service_config(channels)
-        return {channel: config['channel_mapping'][channel.split('/')[-1]] for channel in channels}
+    def _get_topics(self, channels):
+        _, config = self._fetch_service_config(channels)
+        return [config['channel_mapping'][channel.split('/')[-1]] for channel in channels]
 
     def poll(self, timeout=None):
         # Check for channel mapping updates
@@ -139,8 +139,10 @@ class Consumer:
         return msgs
 
     def _check_for_updates(self):
-        if not self._is_cache_valid(','.join(self.current_channels)):
-            logging.debug("Cache expired, refreshing channel mappings")
+        channels_key = ','.join(self.current_channels)
+        is_new_config, config = self._fetch_service_config(self.current_channels)
+        if is_new_config:
+            logging.debug("New configuration fetched, re-subscribing with new configuration")
             self.subscribe(self.current_channels)
 
     def close(self):

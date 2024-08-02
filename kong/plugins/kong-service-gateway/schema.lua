@@ -37,7 +37,7 @@ return {
                           connection = {
                             type = "record",
                             fields = {
-                              { bootstrap_servers = { type = "string", required = true } },
+                              { ["bootstrap.servers"] = { type = "string", required = true } },
                             },
                           },
                         },
