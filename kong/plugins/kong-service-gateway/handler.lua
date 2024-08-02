@@ -55,7 +55,7 @@ local function match_predicates(predicates, uri)
       end
     else
       kong.log.debug("Predicate did not match: ", predicate.part, " value: nil", " expression: ", predicate.expression)
-      return false
+        return false
     end
   end
   return true
@@ -192,15 +192,18 @@ function KongServiceGateway:access(config)
   local query_params = kong.request.get_query()
   kong.log.inspect(query_params)
   local config_profile = query_params["config_profile"]
-  local channels = query_params["channel"] or query_params["channel[]"]
 
-  if not config_profile or not channels then
-    kong.log.err("config_profile or channel query parameters are missing")
-    return kong.response.exit(400, { message = "config_profile and channel query parameters are required" })
+  -- Handle channels from regular or array syntax
+  local channels = {}
+  for k, v in pairs(query_params) do
+    if k == "channel" or k:match("^channel%[[0-9]+%]$") then
+      table.insert(channels, v)
+    end
   end
 
-  if type(channels) == "string" then
-    channels = { channels }
+  if not config_profile or #channels == 0 then
+    kong.log.err("config_profile or channel query parameters are missing")
+    return kong.response.exit(400, { message = "config_profile and channel query parameters are required" })
   end
 
   if #channels == 1 then
@@ -238,28 +241,22 @@ function KongServiceGateway:access(config)
     end
 
     local results = {}
-    local cache = {}
 
     for _, channel_url in ipairs(channels) do
-      if cache[channel_url] then
-        results[channel_url] = cache[channel_url]
+      local uri, err = parse_channel_url(channel_url)
+      if not uri then
+        kong.log.err("Invalid channel URL: ", err)
+        return kong.response.exit(400, { message = err })
+      end
+
+      kong.log.inspect(uri)
+
+      local response, err = process_channel(config, uri, config_profile, consumer)
+      if response then
+        results[channel_url] = response
       else
-        local uri, err = parse_channel_url(channel_url)
-        if not uri then
-          kong.log.err("Invalid channel URL: ", err)
-          return kong.response.exit(400, { message = err })
-        end
-
-        kong.log.inspect(uri)
-
-        local response, err = process_channel(config, uri, config_profile, consumer)
-        if response then
-          cache[channel_url] = response
-          results[channel_url] = response
-        else
-          kong.log.err("Error processing channel: ", err)
-          return kong.response.exit(404, { message = err })
-        end
+        kong.log.err("Error processing channel: ", err)
+        return kong.response.exit(404, { message = err })
       end
     end
 
@@ -272,7 +269,8 @@ function KongServiceGateway:access(config)
 
     for channel_url, data in pairs(results) do
       for path, mapping in pairs(data.channel_mapping) do
-        final_response.channel_mapping[path] = mapping
+        local normalized_path = path:gsub("^/", "")
+        final_response.channel_mapping[normalized_path] = mapping
       end
     end
 

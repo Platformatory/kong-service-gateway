@@ -4,11 +4,15 @@ from datetime import datetime
 from platformatory_kafka.producer import Producer
 
 producer_config = {
-    'service_discovery_uri': 'http://kong:8000/servicegw',
+    'service_gateway_uri': 'http://kong:8000/servicegw',
     'basic_auth': ('user1', 'password1'),
     'client_id': 'foo',
     'config_profile': 'durableWrite',  # Config profile from user code
-    'ttl': 300  # TTL set to 5 minutes (300 seconds)
+    'ttl': 300,  # TTL set to 5 minutes (300 seconds)
+    'additional_params': {  # Additional query parameters
+        'kafka': {'env': 'prod'},
+        'config_profile': {'type': 'producer', 'env': 'prod'}
+    }
 }
 
 # Initialize the producer
@@ -27,9 +31,7 @@ sequence_number = 0
 while True:
     # Generate a random message with a sequence number and a human-readable timestamp
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    service_config = producer._fetch_service_config('kafka://example.com/bar')
-    topic = service_config['channel_mapping']['bar']
-    message = f"Message {sequence_number}: {random.randint(1, 100)} | Topic: {topic} | Time: {current_time}"
+    message = f"Message {sequence_number}: {random.randint(1, 100)} | Time: {current_time}"
 
     # Trigger any available delivery report callbacks from previous produce() calls
     producer.poll(0)
@@ -48,3 +50,4 @@ while True:
 
     # Sleep for a while to simulate a slow producer
     time.sleep(5)  # Adjust the sleep duration as needed
+

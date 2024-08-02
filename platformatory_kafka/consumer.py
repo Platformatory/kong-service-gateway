@@ -1,21 +1,25 @@
 import time
 import requests
 import logging
+from urllib.parse import urlencode, quote_plus
 from confluent_kafka import Consumer as ConfluentConsumer, KafkaException, KafkaError
 
 logging.basicConfig(level=logging.DEBUG)
 
 class Consumer:
     def __init__(self, config):
-        self.service_discovery_uri = config.get('service_discovery_uri')
+        self.service_gateway_uri = config.get('service_gateway_uri')
         self.basic_auth = config.get('basic_auth')
         self.client_id = config.get('client_id')
         self.config_profile = config.get('config_profile')
         self.ttl = config.get('ttl', 300)
+        self.additional_params = config.get('additional_params', {})
         self.cache = {}
         self.cache_time = {}
         self.current_channels = []
 
+        if not self.service_gateway_uri:
+            raise ValueError("Service gateway URI must be set in the configuration")
         if not self.config_profile:
             raise ValueError("Config profile must be set in the configuration")
 
@@ -25,22 +29,38 @@ class Consumer:
     def _is_cache_valid(self, key):
         return key in self.cache and (time.time() - self.cache_time[key]) < self.ttl
 
+    def _encode_nested_params(self, params, prefix=''):
+        """Encode nested query parameters."""
+        encoded_params = {}
+        for k, v in params.items():
+            if isinstance(v, dict):
+                encoded_params.update(self._encode_nested_params(v, prefix=f'{prefix}{k}.'))
+            else:
+                encoded_params[f'{prefix}{k}'] = v
+        return encoded_params
+
     def _fetch_service_config(self, channels):
         channels_key = ','.join(channels)
         if not self._is_cache_valid(channels_key):
             try:
                 logging.debug(f"Fetching service config for channels: {channels}")
+                query_params = {
+                    'config_profile': self.config_profile,
+                }
                 if len(channels) > 1:
-                    response = requests.get(
-                        f"{self.service_discovery_uri}?config_profile={self.config_profile}&" +
-                        '&'.join([f'channel[]={channel}' for channel in channels]),
-                        auth=self.basic_auth
-                    )
+                    for i, channel in enumerate(channels):
+                        query_params[f'channel[{i}]'] = channel
                 else:
-                    response = requests.get(
-                        f"{self.service_discovery_uri}?config_profile={self.config_profile}&channel={channels[0]}",
-                        auth=self.basic_auth
-                    )
+                    query_params['channel'] = channels[0]
+
+                # Encode additional parameters
+                encoded_params = self._encode_nested_params(self.additional_params)
+                query_params.update(encoded_params)
+                query_string = urlencode(query_params, quote_via=quote_plus)
+                response = requests.get(
+                    f"{self.service_gateway_uri}?{query_string}",
+                    auth=self.basic_auth
+                )
                 response.raise_for_status()
                 self.cache[channels_key] = response.json()
                 self.cache_time[channels_key] = time.time()
@@ -66,28 +86,23 @@ class Consumer:
         }
         return initial_config
 
-    def _get_topic_mappings(self, channels):
-        config = self._fetch_service_config(channels)
-        return {channel: config['channel_mapping'][channel.split('/')[-1]] for channel in channels}
-
     def subscribe(self, channels, **kwargs):
         if not channels:
             raise ValueError("At least one channel must be provided for subscription")
         
         self.current_channels = channels
         self.consumer_config = self._get_initial_config(channels)
-        self._initialize_consumer()
-        
+        self.consumer = ConfluentConsumer(self.consumer_config)
+
         topic_mappings = self._get_topic_mappings(channels)
         topics = list(topic_mappings.values())
         
         logging.debug(f"Subscribing to topics: {topics}")
         self.consumer.subscribe(topics, **kwargs)
 
-    def _initialize_consumer(self):
-        if self.consumer:
-            self.consumer.close()
-        self.consumer = ConfluentConsumer(self.consumer_config)
+    def _get_topic_mappings(self, channels):
+        config = self._fetch_service_config(channels)
+        return {channel: config['channel_mapping'][channel.split('/')[-1]] for channel in channels}
 
     def poll(self, timeout=None):
         # Check for channel mapping updates
@@ -131,3 +146,4 @@ class Consumer:
     def close(self):
         if self.consumer:
             self.consumer.close()
+
