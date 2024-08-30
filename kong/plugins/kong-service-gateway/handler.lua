@@ -160,7 +160,7 @@ local function process_channel(config, uri, config_profile, consumer)
 
       local response = {
         connection = kafka_cluster.connection,
-        channel_mapping = { [uri.path[1]] = channel_mapping },
+        channel_mapping = { [uri.path[#uri.path]] = channel_mapping },
         configuration = casted_configs,
         credentials = credential,
       }
